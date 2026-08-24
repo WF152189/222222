@@ -1,0 +1,61 @@
+<main class="page">
+  <section class="panel" *ngIf="!currentUser">
+    <h1>ログイン</h1>
+    <p>PDF管理を利用するにはログインしてください。</p>
+
+    <form class="login-form" (ngSubmit)="login()">
+      <label>
+        ユーザー名
+        <input name="username" [(ngModel)]="loginUsername" autocomplete="username" />
+      </label>
+      <label>
+        パスワード
+        <input name="password" type="password" [(ngModel)]="loginPassword" autocomplete="current-password" />
+      </label>
+      <button type="submit" [disabled]="loading">ログイン</button>
+    </form>
+
+    <p class="message">{{ message }}</p>
+    <p class="hint">サンプル: zhangsan / password, lisi / password, wangwu / password</p>
+  </section>
+
+  <section class="panel" *ngIf="currentUser">
+    <div class="header-row">
+      <div>
+        <h1>PDF管理</h1>
+      </div>
+      <div class="login-status">
+        <span>ログインユーザー: {{ currentUser.userName }} / {{ currentUser.userId }}</span>
+        <button type="button" class="secondary" (click)="logout()" [disabled]="loading">ログアウト</button>
+      </div>
+      <button type="button" (click)="search()" [disabled]="loading">検索</button>
+    </div>
+
+    <p class="message">{{ message }}</p>
+
+    <table *ngIf="reports.length > 0">
+      <thead>
+        <tr>
+          <th>選択</th>
+          <th>PDF名</th>
+          <th>日付</th>
+          <th>番号</th>
+          <th>状態</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let report of reports" [class.selected]="report.id === selectedReport?.id" (click)="select(report)">
+          <td><input type="radio" name="report" [checked]="report.id === selectedReport?.id" /></td>
+          <td>{{ report.name }}</td>
+          <td>{{ report.reportDate }}</td>
+          <td>{{ report.reportNumber }}</td>
+          <td>{{ report.pdfConverted ? '済' : '未' }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="actions">
+      <button type="button" (click)="showPdf()" [disabled]="loading || !selectedReport">PDF表示</button>
+    </div>
+  </section>
+</main>

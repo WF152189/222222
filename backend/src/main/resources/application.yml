@@ -1,0 +1,34 @@
+server:
+  port: 8080
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+app:
+  security:
+    # 练习项目用固定密钥；正式环境请使用环境变量或密钥管理服务注入。
+    jwt-secret: svf-practice-development-secret-change-me
+    jwt-expiration-seconds: 3600
+
+svf:
+  cloud:
+    # mock: 本项目内置的 SVF Cloud 兼容 mock 服务
+    # real: 真实 SVF Cloud。切换时把 base-url 改为 https://api.svfcloud.com，并配置 PKCS8 私钥路径。
+    mode: mock
+    base-url: http://localhost:8080/svf-mock
+    client-id: demo-client
+    secret: demo-secret
+    user-id: demo@api.svfcloud.com
+    user-name: Demo User
+    # real 模式需要 PKCS8 private key。mock 模式会使用可被 mock 服务识别的伪签名。
+    jwt-private-key-path:
+    jwt-expiration-seconds: 300
+    token-expiration-seconds: 3600
+    # mock 专用：用于模拟真实 SVF Cloud 的异步状态、失败和限流。
+    mock-processing-delay-millis: 0
+    mock-force-error: false
+    mock-rate-limit-enabled: false
+    mock-retry-after-seconds: 10

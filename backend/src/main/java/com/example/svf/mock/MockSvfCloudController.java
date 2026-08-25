@@ -135,7 +135,7 @@ public class MockSvfCloudController {
         String artifactId = artifactStore.newArtifactId();
         String actionId = artifactStore.newActionId();
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8));
-        byte[] pdf = pdfRenderer.render(artifactName, formPath, csv, tokenUser.get().userName());
+        byte[] pdf = pdfRenderer.render(artifactName, formPath, csv, tokenUser.get().getUserName());
         MockArtifact artifact = new MockArtifact(
                 artifactId,
                 actionId,
@@ -145,8 +145,8 @@ public class MockSvfCloudController {
                 artifactName + ".pdf",
                 pdf,
                 Instant.now(),
-                tokenUser.get().userId(),
-                tokenUser.get().userName());
+                tokenUser.get().getUserId(),
+                tokenUser.get().getUserName());
         artifactStore.save(artifact);
 
         URI location = URI.create(request.getRequestURL().toString() + "/" + artifactId + "?action=" + actionId + "&ticket=" + ticket);

@@ -61,7 +61,7 @@ public class ReportService {
         if (!convertedReportIds.contains(reportId)) {
             convertedReportIds.add(reportId);
         }
-        return result.pdf();
+        return result.getPdf();
     }
 
     private String toCsv(ReportDetail report) {

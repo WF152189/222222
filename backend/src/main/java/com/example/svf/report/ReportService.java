@@ -1,5 +1,6 @@
 package com.example.svf.report;
 
+import com.example.svf.auth.AuthenticatedUser;
 import com.example.svf.svf.SvfCloudClient;
 import com.example.svf.svf.model.SvfRenderOptions;
 import com.example.svf.svf.model.SvfRenderRequest;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,11 +19,15 @@ import java.util.Map;
 @Service
 public class ReportService {
     private final SvfCloudClient svfCloudClient;
+    private final ReportSearchValidator reportSearchValidator;
     private final Map<String, ReportDetail> reports = new LinkedHashMap<>();
     private final List<String> convertedReportIds = new ArrayList<>();
 
-    public ReportService(SvfCloudClient svfCloudClient) {
+    private final Map<String, SearchMetadata> searchMetadata = new LinkedHashMap<>();
+
+    public ReportService(SvfCloudClient svfCloudClient, ReportSearchValidator reportSearchValidator) {
         this.svfCloudClient = svfCloudClient;
+        this.reportSearchValidator = reportSearchValidator;
         reports.put("RPT-001", new ReportDetail(
                 "RPT-001", "見積書", LocalDate.of(2026, 8, 1), "Q-2026-0001", "東京サンプル商事",
                 List.of(new ReportLine("クラウド利用料", 1, new BigDecimal("12000")),
@@ -33,6 +39,12 @@ public class ReportService {
         reports.put("RPT-003", new ReportDetail(
                 "RPT-003", "納品書", LocalDate.of(2026, 8, 7), "DLV-2026-0012", "名古屋テスト有限会社",
                 List.of(new ReportLine("ライセンス", 5, new BigDecimal("9800")))));
+        searchMetadata.put("RPT-001", new SearchMetadata(
+                LocalDateTime.of(2026, 8, 1, 9, 30), "zhangsan@example.com", "张三", "10001"));
+        searchMetadata.put("RPT-002", new SearchMetadata(
+                LocalDateTime.of(2026, 8, 5, 13, 15), "zhangsan@example.com", "张三", "10002"));
+        searchMetadata.put("RPT-003", new SearchMetadata(
+                LocalDateTime.of(2026, 8, 7, 17, 45), "zhangsan@example.com", "张三", "10001"));
     }
 
     public List<ReportSummary> findAll() {
@@ -44,6 +56,37 @@ public class ReportService {
                         report.reportNumber(),
                         convertedReportIds.contains(report.id())))
                 .toList();
+    }
+
+    public ReportSearchResponse search(ReportSearchRequest request, AuthenticatedUser user) {
+        ReportSearchValidator.ValidatedSearchCriteria criteria = reportSearchValidator.validate(request);
+        List<ReportSearchItem> matched = reports.values().stream()
+                .filter(report -> matches(searchMetadata.get(report.id()), criteria, user.userId()))
+                .map(report -> {
+                    SearchMetadata metadata = searchMetadata.get(report.id());
+                    return new ReportSearchItem(
+                            report.id(),
+                            report.name(),
+                            metadata.createdAt().toLocalDate().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE),
+                            metadata.createdBy(),
+                            convertedReportIds.contains(report.id()) ? "OUTPUT_COMPLETED" : "NOT_OUTPUT");
+                })
+                .toList();
+        return new ReportSearchResponse(matched, matched.size());
+    }
+
+    private boolean matches(SearchMetadata metadata,
+                            ReportSearchValidator.ValidatedSearchCriteria criteria, String userId) {
+        if (metadata == null || !metadata.ownerUserId().equals(userId)) {
+            return false;
+        }
+        if (criteria.startDateTime() != null && metadata.createdAt().isBefore(criteria.startDateTime())) {
+            return false;
+        }
+        if (criteria.endDateTime() != null && metadata.createdAt().isAfter(criteria.endDateTime())) {
+            return false;
+        }
+        return criteria.businessId() == null || criteria.businessId().equals(metadata.businessId());
     }
 
     public byte[] convertToPdf(String reportId, SvfUserContext user) {
@@ -79,5 +122,13 @@ public class ReportService {
                     .append(line.amount()).append('\n');
         }
         return csv.toString();
+    }
+
+    private record SearchMetadata(
+            LocalDateTime createdAt,
+            String ownerUserId,
+            String createdBy,
+            String businessId
+    ) {
     }
 }

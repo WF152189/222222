@@ -94,11 +94,11 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
     /**
      * 指定ユーザーのアクセストークンを返します。
      *
-     * <p>キャッシュに有効なトークンがあればそれを返し、なければ（または
-     * 期限が近ければ）SVF Cloud に要求して更新します。{@code Cache.get(key, loader)}
-     * によるキー単位のアトミックロードのため、同じユーザーの同時要求時にトークン取得は
-     * 1 回にまとまり、かつ別ユーザーの取得は互いにブロックしません。
-     * ロード中に例外が発生した場合はエントリはキャッシュに残りません。
+     * <p>キャッシュに有効なトークンがあればそのまま返し、なければ（または
+     * 期限が近ければ）SVF Cloud に要求して更新します。{@code asMap().compute}
+     * によるキー単位のアトミックなチェック＆リフレッシュのため、同じユーザーの同時要求時に
+     * トークン取得は 1 回にまとまります。ロード中に例外が発生した場合は既存エントリがそのまま保持され、
+     * 期限切れエントリは次回呼び出しで再試行されます。
      * 上限・期限切れエントリの退去は Caffeine が自動で行います。</p>
      *
      * @param user アクセストークンを要求する実行ユーザー
@@ -108,19 +108,15 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
     public String getAccessToken(SvfUserContext user) {
         // userId と userName を区切り文字付きで連結してキャッシュキーを作る
         String cacheKey = user.getUserId() + "\u0000" + user.getUserName();
-        // まずロックなしで高速パス（キャッシュヒット）を確認
-        SvfAccessToken cached = tokenCache.getIfPresent(cacheKey);
-        if (cached != null && !cached.isExpiringSoon(clock)) {
-            return cached.getToken();
-        }
-        // キャッシュミスまたは期限間近の場合のみキー単位のアトミックロードで取得する。
-        // 期限間近エントリは先に削除してからロードする。削除せずにロードすると、
-        // Cache.get は既存エントリをそのまま返して再取得が起きないため。
-        // 削除→ロードの窓期間に並行呼び出しが再取得しても、得られるのは同じく新しいトークンであり、
-        // ロード関数はキー単位で直列化されるため実効的なネットワーク呼び出しは最小限に収まる。
-        tokenCache.invalidate(cacheKey);
-        SvfAccessToken refreshed = tokenCache.get(cacheKey, key -> retrieveAccessToken(user));
-        return refreshed.getToken();
+        // キー単位のアトミック操作で「有効性チェック → 期限切れなら再取得」を行う。
+        // ロード中に例外が発生した場合は既存エントリがそのまま保持され、次回呼び出しで再試行される。
+        SvfAccessToken token = tokenCache.asMap().compute(cacheKey, (key, current) -> {
+            if (current != null && !current.isExpiringSoon(clock)) {
+                return current;
+            }
+            return retrieveAccessToken(user);
+        });
+        return token.getToken();
     }
 
     /**

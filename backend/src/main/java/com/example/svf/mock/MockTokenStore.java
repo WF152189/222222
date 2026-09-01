@@ -23,7 +23,9 @@ public class MockTokenStore {
         String token = UUID.randomUUID().toString().replace("-", "");
         Instant expiration = Instant.now().plusSeconds(properties.resolvedTokenExpirationSeconds());
         accessTokens.put(token, new TokenRecord(expiration, user));
-        return new TokenIssueResult(token, expiration.getEpochSecond());
+        // SVF Cloud 公式レスポンス例（13桁の 1442046911540 等）に合わせてエポックミリ秒を返す。
+        // これによりクライアント側の期限判定ロジックを本番相当の値形式で検証できる。
+        return new TokenIssueResult(token, expiration.toEpochMilli());
     }
 
     public void revoke(String token) {

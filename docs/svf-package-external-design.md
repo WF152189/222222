@@ -103,12 +103,12 @@ public interface SvfCloudClient {
 | redirect | boolean | `redirect` | なし |
 | printer | String | `printer` | null/空 → "PDF" |
 | source | String | `source` | null/空 → "CSV" |
-| waitForCompletion | boolean | （クライアント側動作） | なし。false の場合はポーリングを省略 |
 | pollIntervalMillis | long | （クライアント側動作） | ≤0 → 500ms（実行時は最小 100ms を保証） |
 
 デフォルト生成: `SvfRenderOptions.pdfCsvDefault()` =
-（60秒, redirect=false, printer="PDF", source="CSV", 完了待ちあり, 500ms）
+（60秒, redirect=false, printer="PDF", source="CSV", 500ms）
 
+クライアントはジョブ完了まで常にポーリングする（一律同期処理）。
 呼び出し側は完全なオブジェクトを作る義務を負わず、`resolved*()` メソッド経由で
 常に妥当な値が SVF Cloud に送信される。
 
@@ -129,6 +129,7 @@ public interface SvfCloudClient {
 
 > 現在の呼び出し側（ReportService）は `getPdf()` のみを使用する。
 > artifactId / actionId はログ記録・障害調査（SVF Cloud 実行履歴との突合）のために保持する。
+> PDF バイナリはコンストラクタと `getPdf()` の両方で防御的コピーを行い、外部からの配列書き換えによる内容・ハッシュ値の変動を防ぐ。
 
 ---
 
@@ -155,12 +156,10 @@ sequenceDiagram
     end
     Api->>Svf: POST /v1/artifacts（multipart）
     Svf-->>Api: 202/303 + Locationヘッダー
-    Api->>Api: Location を解析（artifactId/action/ticket）
-    opt waitForCompletion = true
-        loop ジョブ完了まで（500ms間隔）
-            Api->>Svf: GET /v1/actions/{actionId}
-            Svf-->>Api: state（0/1/2/3...）
-        end
+    Api->>Api: Location を解析（artifactId/action）
+    loop ジョブ完了まで（500ms間隔）
+        Api->>Svf: GET /v1/actions/{actionId}
+        Svf-->>Api: state（0/1/2/3...）
     end
     Api->>Svf: GET {downloadUri}（action/ticket 付き）
     Svf-->>Api: PDF バイナリ
@@ -176,7 +175,7 @@ sequenceDiagram
 | Content-Type | `application/x-www-form-urlencoded` |
 | 認証ヘッダー | `Basic base64(clientId:secret)` |
 | フォーム本文 | `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`（RFC 7523）<br>`assertion=署名済みJWT` |
-| 応答 | `{ "token": "...", "expiration": エポック秒 }`（両方必須、欠落時は応答不正扱い） |
+| 応答 | `{ "token": "...", "expiration": 有効期限 }`（両方必須、欠落時は応答不正扱い）。expiration は公式レスポンス例がエポックミリ秒（13桁）である一方、説明文中には秒と読める記載もあるため、クライアントは桁数の境界判定で両形式を受け入れる（実環境の単位が確定したら固定解釈に置き換える） |
 
 #### ② 印刷ジョブ登録 — `POST /v1/artifacts`
 
@@ -201,8 +200,10 @@ sequenceDiagram
 | 0 | 未処理 | 待機（再ポーリング） |
 | 1 | 処理中 | 待機（再ポーリング） |
 | 2 | 完了 | ポーリング終了、ダウンロードへ |
-| 3 以上 | 失敗 | 即時 `SvfCloudException` |
+| 3 / 5 / 6 | 終端失敗状態 | 即時 `SvfCloudException` |
+| 11 / 21 / 22 / 31 等 | 準備中・作成中・作成完了・ダウンロード中等の中間状態 | 正常な処理途中のため待機（再ポーリング） |
 
+- 失敗判定は終端失敗状態（3 / 5 / 6）のホワイトリスト方式。それ以外の未知の値も処理途中とみなしポーリングを継続する（公式の印刷ステータス一覧に基づく）
 - タイムアウト: `resolvedTimeoutSeconds()` 経過で `SvfCloudException`
 
 #### ④ 生成物ダウンロード — `GET {downloadUri}`
@@ -256,7 +257,7 @@ SVF Cloud 側の実行履歴に「どの業務ユーザーが実行したか」�
 | 認証エラー | トークン取得時 | `/oauth2/token` の HTTP エラー、応答不正 |
 | 署名エラー | assertion 生成時 | real モードでの秘密鍵パス未設定・読み込み失敗 |
 | ジョブ登録エラー | ジョブ登録時 | 202/303 以外のステータス、Location ヘッダー欠落・不正 |
-| ジョブ失敗 | ポーリング時 | state ≥ 3 |
+| ジョブ失敗 | ポーリング時 | state = 3 / 5 / 6（終端失敗状態） |
 | タイムアウト | ポーリング時 | `resolvedTimeoutSeconds()` 超過 |
 | ダウンロードエラー | 生成物取得時 | HTTP エラー、空のアーティファクト |
 | 割り込み | ポーリング待機中 | `InterruptedException` → 例外化＋割り込み状態復元 |
@@ -279,8 +280,8 @@ SVF Cloud 側の実行履歴に「どの業務ユーザーが実行したか」�
 | 保存先 | メモリ内（Caffeine キャッシュ） |
 | エントリ上限 | maximumSize = 1000。超過時は使用頻度の低いエントリから退去 |
 | 期限退去 | expireAfterWrite = トークン有効期限（`svf.cloud.token-expiration-seconds`、既定 3600 秒）。未使用エントリは自動的に削除される |
-| 期限判定 | 有効期限の **60 秒前**（EXPIRATION_BUFFER_SECONDS）になったら期限間近とみなす |
-| 並行制御 | 二重チェックロック（高速パスはロックなし、取得時のみ `synchronized`）により同一ユーザーの同時要求でトークン取得が重複しないことを保証 |
+| 期限判定 | 有効期限の **60 秒前**（EXPIRATION_BUFFER_SECONDS）になったら期限間近とみなす。判定は注入された `Clock` に基づく（テストで固定時刻に差し替え可能） |
+| 並行制御 | `Cache.get(key, loader)` による**キャッシュキー単位のアトミックロード**。同一ユーザーの同時要求ではトークン取得が 1 回にまとまり、別ユーザーの取得は互いにブロックしない。ロード中の例外はエントリをキャッシュに残さない |
 
 ### 7.2 制約事項
 

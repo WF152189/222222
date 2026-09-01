@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { AuthenticatedUser } from './auth.model';
 import { AuthService } from './auth.service';
 import { ReportService } from './report.service';
+import { ReportNumberItem } from './report-number-item';
 import { ReportSummary } from './report-summary';
 
 @Component({
@@ -22,12 +23,31 @@ export class AppComponent implements OnDestroy {
   private objectUrl?: string;
   loading = false;
   message = '検索ボタンを押して帳票一覧を取得してください。';
+  /** 番号検索入力欄の入力値 */
+  numberQuery = '';
+  /** 初期表示時に取得した番号・PDF名の全候補 */
+  numberOptions: ReportNumberItem[] = [];
+  /** 候補一覧の表示状態 */
+  showNumberOptions = false;
+  private closeOptionsTimeout?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly reportService: ReportService,
     private readonly authService: AuthService
   ) {
     this.currentUser = this.authService.getCurrentUser();
+    if (this.currentUser) {
+      this.loadNumberOptions();
+    }
+  }
+
+  /** 入力値との前方一致で絞り込んだ候補一覧（空入力なら全候補）。 */
+  get filteredNumberOptions(): ReportNumberItem[] {
+    const query = this.numberQuery.trim();
+    if (!query) {
+      return this.numberOptions;
+    }
+    return this.numberOptions.filter((item) => item.number.startsWith(query));
   }
 
   login(): void {
@@ -38,6 +58,7 @@ export class AppComponent implements OnDestroy {
         this.currentUser = response.user;
         this.loading = false;
         this.message = `${response.user.userName} としてログインしました。`;
+        this.loadNumberOptions();
       },
       error: () => {
         this.loading = false;
@@ -51,18 +72,62 @@ export class AppComponent implements OnDestroy {
     this.currentUser = null;
     this.reports = [];
     this.selectedReport = undefined;
+    this.numberQuery = '';
+    this.numberOptions = [];
+    this.closeNumberOptions();
     this.revokeObjectUrl();
     this.message = 'ログアウトしました。';
+  }
+
+  /** PDF管理画面の初期表示時に番号・PDF名の一覧を取得します。 */
+  loadNumberOptions(): void {
+    this.reportService.fetchNumberOptions().subscribe({
+      next: (options) => {
+        this.numberOptions = options;
+      },
+      error: () => {
+        this.numberOptions = [];
+        this.message = '番号検索候補の取得に失敗しました。';
+      }
+    });
+  }
+
+  openNumberOptions(): void {
+    if (this.closeOptionsTimeout) {
+      clearTimeout(this.closeOptionsTimeout);
+      this.closeOptionsTimeout = undefined;
+    }
+    this.showNumberOptions = true;
+  }
+
+  closeNumberOptions(): void {
+    this.showNumberOptions = false;
+  }
+
+  /** フォーカスが外れたとき、候補クリックの mousedown が先に処理されるよう僅か遅らせて閉じます。 */
+  onNumberInputBlur(): void {
+    this.closeOptionsTimeout = setTimeout(() => this.closeNumberOptions(), 120);
+  }
+
+  /** 候補を選択したとき、その番号を検索入力欄に設定します。 */
+  selectNumberOption(item: ReportNumberItem): void {
+    this.numberQuery = item.number;
+    this.closeNumberOptions();
+    this.message = `番号 ${item.number}（${item.pdfName}）を検索条件に設定しました。`;
   }
 
   search(): void {
     this.loading = true;
     this.message = '帳票一覧を取得中です。';
-    this.reportService.searchReports().subscribe({
+    const numberCondition = this.numberQuery.trim() || undefined;
+    this.reportService.searchReports(numberCondition).subscribe({
       next: (reports: ReportSummary[]) => {
         this.reports = reports;
+        this.selectedReport = undefined;
         this.loading = false;
-        this.message = `${reports.length} 件の帳票を取得しました。`;
+        this.message = reports.length > 0
+          ? `${reports.length} 件の帳票を取得しました。`
+          : '検索条件に一致する帳票がありませんでした。';
       },
       error: () => {
         this.loading = false;
@@ -102,6 +167,9 @@ export class AppComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.closeOptionsTimeout) {
+      clearTimeout(this.closeOptionsTimeout);
+    }
     this.revokeObjectUrl();
   }
 

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
@@ -36,8 +37,18 @@ public class ReportController {
     }
 
     @GetMapping
-    public List<ReportSummary> searchReports() {
-        return reportService.findAll();
+    public List<ReportSummary> searchReports(
+            @RequestParam(value = "number", required = false) String number) {
+        return reportService.findAll(number);
+    }
+
+    /**
+     * PDF管理画面の番号検索候補用: 帳票番号と PDF 名の一覧を返します。
+     * 各要素は {"number": 帳票番号, "pdfName": PDF名} の Map です。
+     */
+    @GetMapping(value = "/numbers", produces = MediaType.APPLICATION_JSON_VALUE)
+    public List<Map<String, String>> listNumberItems() {
+        return reportService.findAllNumberItems();
     }
 
     @PostMapping(value = "/search", consumes = MediaType.APPLICATION_JSON_VALUE,

@@ -29,11 +29,9 @@ public final class SvfRenderOptions {
      */
     private final String source;
     /**
-     * 印刷ジョブの完了までポーリングして待つかどうか。
-     */
-    private final boolean waitForCompletion;
-    /**
-     * ポーリング間隔（ミリ秒）。0 以下の場合は 500ms に補正される。
+     * 印刷ジョブの完了までポーリングする際の間隔（ミリ秒）。
+     * クライアントは常にジョブ完了までポーリングしてからダウンロードする。
+     * 0 以下の場合は 500ms に補正される。
      */
     private final long pollIntervalMillis;
 
@@ -42,23 +40,21 @@ public final class SvfRenderOptions {
             boolean redirect,
             String printer,
             String source,
-            boolean waitForCompletion,
             long pollIntervalMillis) {
         this.timeoutSeconds = timeoutSeconds;
         this.redirect = redirect;
         this.printer = printer;
         this.source = source;
-        this.waitForCompletion = waitForCompletion;
         this.pollIntervalMillis = pollIntervalMillis;
     }
 
     /**
      * PDF/CSV 出力用のデフォルトオプションを生成します。
      * タイムアウト 60 秒、リダイレクトなし、プリンタ "PDF"、ソース "CSV"、
-     * 完了待ちあり、ポーリング間隔 500ms。
+     * ポーリング間隔 500ms。
      */
     public static SvfRenderOptions pdfCsvDefault() {
-        return new SvfRenderOptions(60, false, "PDF", "CSV", true, 500);
+        return new SvfRenderOptions(60, false, "PDF", "CSV", 500);
     }
 
     /** タイムアウト秒数を返します。 */
@@ -79,11 +75,6 @@ public final class SvfRenderOptions {
     /** データソースを返します。 */
     public String getSource() {
         return source;
-    }
-
-    /** 完了待ち可否を返します。 */
-    public boolean getWaitForCompletion() {
-        return waitForCompletion;
     }
 
     /** ポーリング間隔（ミリ秒）を返します。 */
@@ -129,7 +120,6 @@ public final class SvfRenderOptions {
         }
         return timeoutSeconds == other.timeoutSeconds
                 && redirect == other.redirect
-                && waitForCompletion == other.waitForCompletion
                 && pollIntervalMillis == other.pollIntervalMillis
                 && Objects.equals(printer, other.printer)
                 && Objects.equals(source, other.source);
@@ -137,7 +127,7 @@ public final class SvfRenderOptions {
 
     @Override
     public int hashCode() {
-        return Objects.hash(timeoutSeconds, redirect, printer, source, waitForCompletion, pollIntervalMillis);
+        return Objects.hash(timeoutSeconds, redirect, printer, source, pollIntervalMillis);
     }
 
     @Override
@@ -146,7 +136,6 @@ public final class SvfRenderOptions {
                 + ", redirect=" + redirect
                 + ", printer=" + printer
                 + ", source=" + source
-                + ", waitForCompletion=" + waitForCompletion
                 + ", pollIntervalMillis=" + pollIntervalMillis + "]";
     }
 }

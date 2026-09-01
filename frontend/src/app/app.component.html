@@ -31,6 +31,29 @@
       <button type="button" (click)="search()" [disabled]="loading">検索</button>
     </div>
 
+    <div class="number-search">
+      <label>
+        番号検索（番号を入力すると候補を絞り込み）
+        <div class="number-search-field">
+          <input
+            name="numberSearch"
+            [(ngModel)]="numberQuery"
+            placeholder="番号を入力してください"
+            autocomplete="off"
+            (focus)="openNumberOptions()"
+            (blur)="onNumberInputBlur()"
+          />
+          <ul class="number-options" *ngIf="showNumberOptions">
+            <li
+              *ngFor="let item of filteredNumberOptions"
+              (mousedown)="selectNumberOption(item)"
+            >{{ item.number }}－{{ item.pdfName }}</li>
+            <li class="empty" *ngIf="filteredNumberOptions.length === 0">該当する候補がありません</li>
+          </ul>
+        </div>
+      </label>
+    </div>
+
     <p class="message">{{ message }}</p>
 
     <table *ngIf="reports.length > 0">

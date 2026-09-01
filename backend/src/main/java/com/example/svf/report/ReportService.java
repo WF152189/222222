@@ -47,14 +47,37 @@ public class ReportService {
                 LocalDateTime.of(2026, 8, 7, 17, 45), "zhangsan@example.com", "张三", "10001"));
     }
 
-    public List<ReportSummary> findAll() {
+    /**
+     * 帳票一覧を検索します。
+     * {@code number} が指定された場合は帳票番号との前方一致で絞り込み、
+     * 未指定（null または空）の場合は全件を返します。
+     */
+    public List<ReportSummary> findAll(String number) {
+        String condition = number == null ? "" : number.trim();
         return reports.values().stream()
+                .filter(report -> condition.isEmpty() || report.reportNumber().startsWith(condition))
                 .map(report -> new ReportSummary(
                         report.id(),
                         report.name(),
                         report.reportDate(),
                         report.reportNumber(),
                         convertedReportIds.contains(report.id())))
+                .toList();
+    }
+
+    /**
+     * 帳票番号と PDF 名の組を一覧取得します。
+     * PDF管理画面の番号検索入力欄が候補一覧を表示するために使用します。
+     * 各要素は {"number": 帳票番号, "pdfName": PDF名} の Map です。
+     */
+    public List<Map<String, String>> findAllNumberItems() {
+        return reports.values().stream()
+                .map(report -> {
+                    Map<String, String> item = new LinkedHashMap<String, String>();
+                    item.put("number", report.reportNumber());
+                    item.put("pdfName", report.name());
+                    return item;
+                })
                 .toList();
     }
 

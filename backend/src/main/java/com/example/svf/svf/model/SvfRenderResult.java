@@ -9,7 +9,9 @@ import java.util.Objects;
  * <p>PDF バイナリ本体に加えて、SVF Cloud 側で追跡可能なメタ情報
  * （artifactId / actionId）をまとめて返します。</p>
  *
- * <p>不変クラス: 生成後にフィールドは変更されません。</p>
+ * <p>不変クラス: 生成後にフィールドは変更されません。
+ * PDF バイナリはコンストラクタと {@link #getPdf()} の両方で防御的コピーを行い、
+ * 外部からの配列書き換えによる内容・ハッシュ値の変動を防ぎます。</p>
  */
 public final class SvfRenderResult {
     /**
@@ -29,14 +31,16 @@ public final class SvfRenderResult {
     private final String actionId;
 
     public SvfRenderResult(byte[] pdf, String artifactId, String actionId) {
-        this.pdf = pdf;
+        // 防御的コピー: 呼び出し元が保持する配列の事後変更が内容に反映されないようにする
+        this.pdf = pdf == null ? null : pdf.clone();
         this.artifactId = artifactId;
         this.actionId = actionId;
     }
 
-    /** 生成された PDF のバイナリを返します。 */
+    /** 生成された PDF のバイナリを返します（防御的コピー済み）。 */
     public byte[] getPdf() {
-        return pdf;
+        // 防御的コピー: 返却先による配列書き換えが内部状態に影響しないようにする
+        return pdf == null ? null : pdf.clone();
     }
 
     /** SVF Cloud が割り当てた生成物 ID を返します。 */

@@ -4,6 +4,7 @@ import com.example.svf.config.SvfCloudProperties;
 import com.example.svf.svf.model.SvfUserContext;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -14,6 +15,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
@@ -48,20 +50,40 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
     private static final String JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer";
     /** キャッシュエントリ数の上限。超過時は使用頻度の低いエントリから退去される。 */
     private static final long MAX_CACHE_SIZE = 1000;
+    /**
+     * エポックミリ秒とエポック秒の境界値。
+     * この値以上ならエポックミリ秒（13桁の例: 1442046911540）、
+     * 未満ならエポック秒（10桁の例: 1442046911）と判定できる。
+     */
+    private static final long EPOCH_MILLIS_THRESHOLD = 100_000_000_000L;
 
     private final SvfCloudProperties properties;
     private final SvfJwtAssertionFactory assertionFactory;
     private final RestClient restClient;
+    /** 期限判定に使用する時刻源（テストでは固定時刻に差し替え可能）。 */
+    private final Clock clock;
     /** ユーザーごとのトークンキャッシュ。キーは "userId\u0000userName"。 */
     private final Cache<String, SvfAccessToken> tokenCache;
 
+    /** 本番用: 時刻源はシステム時計（UTC）。コンストラクタが複数あるため DI 対象を明示する。 */
+    @Autowired
     public CachedSvfTokenProvider(
             SvfCloudProperties properties,
             SvfJwtAssertionFactory assertionFactory,
             RestClient.Builder builder) {
+        this(properties, assertionFactory, builder, Clock.systemUTC());
+    }
+
+    /** テスト用: 時刻源を差し替えるコンストラクタ。 */
+    CachedSvfTokenProvider(
+            SvfCloudProperties properties,
+            SvfJwtAssertionFactory assertionFactory,
+            RestClient.Builder builder,
+            Clock clock) {
         this.properties = properties;
         this.assertionFactory = assertionFactory;
         this.restClient = builder.baseUrl(properties.baseUrl()).build();
+        this.clock = clock;
         this.tokenCache = Caffeine.newBuilder()
                 .maximumSize(MAX_CACHE_SIZE)
                 // トークン有効期限を過ぎた未使用エントリは自動的に退去させる
@@ -73,8 +95,10 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
      * 指定ユーザーのアクセストークンを返します。
      *
      * <p>キャッシュに有効なトークンがあればそれを返し、なければ（または
-     * 期限が近ければ）SVF Cloud に要求して更新します。二重チェックロックで
-     * 同じユーザーの同時要求時にトークン取得が重複しないようにしています。
+     * 期限が近ければ）SVF Cloud に要求して更新します。{@code Cache.get(key, loader)}
+     * によるキー単位のアトミックロードのため、同じユーザーの同時要求時にトークン取得は
+     * 1 回にまとまり、かつ別ユーザーの取得は互いにブロックしません。
+     * ロード中に例外が発生した場合はエントリはキャッシュに残りません。
      * 上限・期限切れエントリの退去は Caffeine が自動で行います。</p>
      *
      * @param user アクセストークンを要求する実行ユーザー
@@ -86,20 +110,17 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
         String cacheKey = user.getUserId() + "\u0000" + user.getUserName();
         // まずロックなしで高速パス（キャッシュヒット）を確認
         SvfAccessToken cached = tokenCache.getIfPresent(cacheKey);
-        if (cached != null && !cached.isExpiringSoon()) {
+        if (cached != null && !cached.isExpiringSoon(clock)) {
             return cached.getToken();
         }
-        // キャッシュミスまたは期限間近の場合のみ同期ブロックに入って取得する
-        synchronized (tokenCache) {
-            // 二重チェック: 待っている間に他スレッドが更新した可能性があるため再確認
-            cached = tokenCache.getIfPresent(cacheKey);
-            if (cached != null && !cached.isExpiringSoon()) {
-                return cached.getToken();
-            }
-            SvfAccessToken refreshed = retrieveAccessToken(user);
-            tokenCache.put(cacheKey, refreshed);
-            return refreshed.getToken();
-        }
+        // キャッシュミスまたは期限間近の場合のみキー単位のアトミックロードで取得する。
+        // 期限間近エントリは先に削除してからロードする。削除せずにロードすると、
+        // Cache.get は既存エントリをそのまま返して再取得が起きないため。
+        // 削除→ロードの窓期間に並行呼び出しが再取得しても、得られるのは同じく新しいトークンであり、
+        // ロード関数はキー単位で直列化されるため実効的なネットワーク呼び出しは最小限に収まる。
+        tokenCache.invalidate(cacheKey);
+        SvfAccessToken refreshed = tokenCache.get(cacheKey, key -> retrieveAccessToken(user));
+        return refreshed.getToken();
     }
 
     /**
@@ -131,23 +152,52 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
             if (response == null || response.get("token") == null || response.get("expiration") == null) {
                 throw new SvfCloudException("SVF Cloud token response is invalid");
             }
-            return new SvfAccessToken(response.get("token").toString(), Long.parseLong(response.get("expiration").toString()));
+            return new SvfAccessToken(
+                    response.get("token").toString(),
+                    parseExpiration(response.get("expiration").toString()));
         } catch (RestClientResponseException ex) {
             throw new SvfCloudException("SVF Cloud token request failed: " + ex.getStatusCode(), ex);
         }
     }
 
     /**
+     * トークン応答の expiration 値をエポックミリ秒に変換します。
+     *
+     * <p>SVF Cloud の公式レスポンス例（例: {@code 1442046911540}）はエポックミリ秒形式です。
+     * 一方、公式説明文中には秒数と読める記載もあり単位が確定していないため、
+     * ここでは桁数に基づく境界判定で両形式を安全に受け入れます：</p>
+     * <ul>
+     *   <li>{@value #EPOCH_MILLIS_THRESHOLD} 以上 → エポックミリ秒（2001年以降を表すには桁数が足りない秒値と区別できる）</li>
+     *   <li>未満 → エポック秒 → ミリ秒に変換</li>
+     * </ul>
+     *
+     * <p>なお実環境の単位が判明した場合は、この判定を固定の単位解釈に置き換えること。</p>
+     */
+    private Instant parseExpiration(String expirationValue) {
+        long value = Long.parseLong(expirationValue);
+        if (value >= EPOCH_MILLIS_THRESHOLD) {
+            return Instant.ofEpochMilli(value);
+        }
+        return Instant.ofEpochSecond(value);
+    }
+
+    /** テスト用: 指定ユーザーのキャッシュ済みトークンの有効期限を返します（未キャッシュなら null）。 */
+    Instant cachedExpiration(SvfUserContext user) {
+        SvfAccessToken cached = tokenCache.getIfPresent(user.getUserId() + "\u0000" + user.getUserName());
+        return cached == null ? null : cached.getExpiration();
+    }
+
+    /**
      * キャッシュ用のトークン情報。
-     * 不変クラス: アクセストークン文字列と有効期限（エポック秒）を保持する。
+     * 不変クラス: アクセストークン文字列と有効期限を保持する。
      */
     private static final class SvfAccessToken {
         private final String token;
-        private final long expirationEpochSeconds;
+        private final Instant expiration;
 
-        SvfAccessToken(String token, long expirationEpochSeconds) {
+        SvfAccessToken(String token, Instant expiration) {
             this.token = token;
-            this.expirationEpochSeconds = expirationEpochSeconds;
+            this.expiration = expiration;
         }
 
         /** アクセストークン文字列を返します。 */
@@ -155,16 +205,16 @@ public class CachedSvfTokenProvider implements SvfTokenProvider {
             return token;
         }
 
-        /** 有効期限（エポック秒）を返します。 */
-        long getExpirationEpochSeconds() {
-            return expirationEpochSeconds;
+        /** 有効期限を返します。 */
+        Instant getExpiration() {
+            return expiration;
         }
 
         /**
          * トークンが期限間近（バッファ秒数以内）かどうかを判定します。
          */
-        boolean isExpiringSoon() {
-            return Instant.now().getEpochSecond() >= expirationEpochSeconds - EXPIRATION_BUFFER_SECONDS;
+        boolean isExpiringSoon(Clock clock) {
+            return !Instant.now(clock).isBefore(expiration.minusSeconds(EXPIRATION_BUFFER_SECONDS));
         }
     }
 }

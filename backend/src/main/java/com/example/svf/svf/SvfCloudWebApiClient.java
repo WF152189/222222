@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * SVF Cloud WebAPI と通信する {@link SvfCloudClient} の実装。
@@ -29,7 +30,7 @@ import java.util.Map;
  *   <li>要求を検証（必須項目チェック）</li>
  *   <li>実行ユーザーのアクセストークンを {@link SvfTokenProvider} から取得（ユーザー単位キャッシュ）</li>
  *   <li>印刷ジョブを登録: {@code POST /v1/artifacts}（multipart/form-data）</li>
- *   <li>オプション指定時は {@code GET /v1/actions/{actionId}} で完了までポーリング</li>
+ *   <li>{@code GET /v1/actions/{actionId}} で完了までポーリング</li>
  *   <li>Location ヘッダーの URI から生成物（PDF）をダウンロード</li>
  * </ol>
  *
@@ -38,6 +39,13 @@ import java.util.Map;
  */
 @Component
 public class SvfCloudWebApiClient implements SvfCloudClient {
+    /**
+     * 印刷ジョブの終端失敗状態（SVF Cloud 公式の印刷ステータス一覧に基づく）。
+     * これら以外の状態（0/1/11/21/22/31 等の中間状態を含む）はすべて処理途中とみなし、
+     * state=2（完了）になるまでポーリングを継続する。
+     */
+    private static final Set<Integer> FAILED_ACTION_STATES = Set.of(3, 5, 6);
+
     private final SvfTokenProvider tokenProvider;
     private final RestClient restClient;
 
@@ -52,8 +60,9 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
     }
 
     /**
-     * PDF レンダリングのメイン処理。ジョブ登録→（完了待ち）→ダウンロードを
+     * PDF レンダリングのメイン処理。ジョブ登録→完了待ち→ダウンロードを
      * 一括して実行し、PDF バイナリとメタ情報を返します。
+     * ジョブ完了まで常にポーリングする同期処理として動作します。
      */
     @Override
     public SvfRenderResult renderPdf(SvfRenderRequest request) {
@@ -64,10 +73,8 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
         String token = tokenProvider.getAccessToken(user);
         // 印刷ジョブを登録し、ダウンロード URI と各種 ID を解析する
         PrintJobLocation job = executePrintJob(token, request);
-        // オプション指定時はジョブ完了までポーリングしてからダウンロードする
-        if (options.getWaitForCompletion()) {
-            waitUntilCompleted(token, job.getActionId(), options);
-        }
+        // ジョブ完了までポーリングしてからダウンロードする（一律同期処理）
+        waitUntilCompleted(token, job.getActionId(), options);
         byte[] pdf = downloadArtifact(token, job.getDownloadUri());
         return new SvfRenderResult(pdf, job.getArtifactId(), job.getActionId());
     }
@@ -129,7 +136,13 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
     /**
      * 印刷ジョブが完了するまでポーリングします。
      *
-     * <p>state の意味: 0=未処理、1=処理中、2=完了、3以上=失敗。</p>
+     * <p>state の意味（公式の印刷ステータス一覧に基づく）:</p>
+     * <ul>
+     *   <li>2: 完了（ダウンロード可能）</li>
+     *   <li>3 / 5 / 6: 終端失敗状態（即時エラー）</li>
+     *   <li>それ以外（0=未処理、1=処理中、11=準備中、21=作成中、22=作成完了、
+     *       31=ダウンロード中 等）: 正常な処理途中のためポーリング継続</li>
+     * </ul>
      *
      * @param token    アクセストークン
      * @param actionId ジョブの実行記録 ID
@@ -144,8 +157,9 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
                 // 完了: ダウンロード可能
                 return;
             }
-            if (state >= 3) {
-                // 失敗系状態: すぐエラーとして報告する
+            if (FAILED_ACTION_STATES.contains(state)) {
+                // 終端失敗状態: すぐエラーとして報告する。
+                // それ以外の状態は正常な処理途中のためポーリングを継続する。
                 throw new SvfCloudException("SVF Cloud print job failed. actionId=" + actionId + ", state=" + state);
             }
             sleep(options.resolvedPollIntervalMillis());
@@ -156,7 +170,7 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
     /**
      * 印刷ジョブの現在状態を取得します（{@code GET /v1/actions/{actionId}}）。
      *
-     * @return state 値（0=未処理、1=処理中、2=完了、3以上=失敗）
+     * @return state 値（2=完了、3/5/6=終端失敗、その他=処理途中）
      * @throws SvfCloudException 応答が不正、または HTTP エラーの場合
      */
     private int retrieveActionState(String token, String actionId) {
@@ -259,20 +273,17 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
      *   <li>downloadUri: 生成物ダウンロード用の完全な URI</li>
      *   <li>artifactId: 生成物 ID（パスの最終要素）</li>
      *   <li>actionId: 印刷ジョブの実行記録 ID（クエリパラメータ action）</li>
-     *   <li>ticket: ダウンロード用の一回限りチケット（クエリパラメータ ticket）</li>
      * </ul>
      */
     private static final class PrintJobLocation {
         private final URI downloadUri;
         private final String artifactId;
         private final String actionId;
-        private final String ticket;
 
-        PrintJobLocation(URI downloadUri, String artifactId, String actionId, String ticket) {
+        PrintJobLocation(URI downloadUri, String artifactId, String actionId) {
             this.downloadUri = downloadUri;
             this.artifactId = artifactId;
             this.actionId = actionId;
-            this.ticket = ticket;
         }
 
         /** 生成物ダウンロード用の完全な URI を返します。 */
@@ -290,25 +301,19 @@ public class SvfCloudWebApiClient implements SvfCloudClient {
             return actionId;
         }
 
-        /** ダウンロード用の一回限りチケットを返します。 */
-        String getTicket() {
-            return ticket;
-        }
-
         /**
          * Location ヘッダーの URI を解析します。
-         * パス末尾から artifactId を、クエリから action / ticket を取り出します。
+         * パス末尾から artifactId を、クエリから action を取り出します。
          * いずれか欠けている場合は SVF Cloud の応答不正とみなして例外を投げます。
          */
         static PrintJobLocation from(URI location) {
             String path = location.getPath();
             String artifactId = path.substring(path.lastIndexOf('/') + 1);
             String actionId = queryParam(location, "action");
-            String ticket = queryParam(location, "ticket");
-            if (artifactId.isBlank() || actionId == null || ticket == null) {
+            if (artifactId.isBlank() || actionId == null) {
                 throw new SvfCloudException("SVF Cloud Location header is invalid: " + location);
             }
-            return new PrintJobLocation(location, artifactId, actionId, ticket);
+            return new PrintJobLocation(location, artifactId, actionId);
         }
 
         /**

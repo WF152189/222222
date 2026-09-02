@@ -12,7 +12,7 @@ import { ReportSummary } from './report-summary';
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './app.component.html',
-  styleUrl: './app.component.css'
+  styleUrl: './app.component.scss'
 })
 export class AppComponent implements OnDestroy {
   reports: ReportSummary[] = [];
@@ -29,7 +29,8 @@ export class AppComponent implements OnDestroy {
   numberOptions: ReportNumberItem[] = [];
   /** 候補一覧の表示状態 */
   showNumberOptions = false;
-  private closeOptionsTimeout?: ReturnType<typeof setTimeout>;
+  /** blur 遅延クローズ用のタイマー ID（`window.setTimeout` はブラウザ API なので必ず `number`）。 */
+  private closeOptionsTimeout?: number;
 
   constructor(
     private readonly reportService: ReportService,
@@ -94,7 +95,7 @@ export class AppComponent implements OnDestroy {
 
   openNumberOptions(): void {
     if (this.closeOptionsTimeout) {
-      clearTimeout(this.closeOptionsTimeout);
+      window.clearTimeout(this.closeOptionsTimeout);
       this.closeOptionsTimeout = undefined;
     }
     this.showNumberOptions = true;
@@ -106,7 +107,7 @@ export class AppComponent implements OnDestroy {
 
   /** フォーカスが外れたとき、候補クリックの mousedown が先に処理されるよう僅か遅らせて閉じます。 */
   onNumberInputBlur(): void {
-    this.closeOptionsTimeout = setTimeout(() => this.closeNumberOptions(), 120);
+    this.closeOptionsTimeout = window.setTimeout(() => this.closeNumberOptions(), 120);
   }
 
   /** 候補を選択したとき、その番号を検索入力欄に設定します。 */
@@ -168,7 +169,7 @@ export class AppComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     if (this.closeOptionsTimeout) {
-      clearTimeout(this.closeOptionsTimeout);
+      window.clearTimeout(this.closeOptionsTimeout);
     }
     this.revokeObjectUrl();
   }

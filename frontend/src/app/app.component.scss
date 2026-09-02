@@ -127,14 +127,15 @@ tbody tr {
   text-align: right;
 }
 
+// 番号検索入力欄と候補ドロップダウン（SCSS ネスト記法）
 .number-search {
   margin-top: 20px;
-}
 
-.number-search > label {
-  display: grid;
-  font-weight: 700;
-  gap: 6px;
+  > label {
+    display: grid;
+    font-weight: 700;
+    gap: 6px;
+  }
 }
 
 .number-search-field {
@@ -156,23 +157,22 @@ tbody tr {
   position: absolute;
   top: 100%;
   z-index: 10;
-}
 
-.number-options li {
-  cursor: pointer;
-  padding: 8px 12px;
-}
+  li {
+    cursor: pointer;
+    padding: 8px 12px;
 
-.number-options li:hover {
-  background: #eff6ff;
-}
+    &:hover {
+      background: #eff6ff;
+    }
 
-.number-options li.empty {
-  color: #64748b;
-  cursor: default;
-}
+    &.empty {
+      color: #64748b;
+      cursor: default;
 
-.number-options li.empty:hover {
-  background: transparent;
+      &:hover {
+        background: transparent;
+      }
+    }
+  }
 }
-

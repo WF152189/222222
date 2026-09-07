@@ -1,11 +1,15 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { AuthenticatedUser } from './auth.model';
 import { AuthService } from './auth.service';
 import { ReportService } from './report.service';
 import { ReportNumberItem } from './report-number-item';
 import { ReportSummary } from './report-summary';
+import { ReportSearchRequest } from './report-search-request';
+
+type DateTimeField = 'startDate' | 'startTime' | 'endDate' | 'endTime' | 'dateRange';
 
 @Component({
   selector: 'app-root',
@@ -25,6 +29,11 @@ export class AppComponent implements OnDestroy {
   message = '検索ボタンを押して帳票一覧を取得してください。';
   /** 番号検索入力欄の入力値 */
   numberQuery = '';
+  startDate = '';
+  startTime = '';
+  endDate = '';
+  endTime = '';
+  dateTimeErrors: Partial<Record<DateTimeField, string>> = {};
   /** 初期表示時に取得した番号・PDF名の全候補 */
   numberOptions: ReportNumberItem[] = [];
   /** 候補一覧の表示状態 */
@@ -74,6 +83,11 @@ export class AppComponent implements OnDestroy {
     this.reports = [];
     this.selectedReport = undefined;
     this.numberQuery = '';
+    this.startDate = '';
+    this.startTime = '';
+    this.endDate = '';
+    this.endTime = '';
+    this.dateTimeErrors = {};
     this.numberOptions = [];
     this.closeNumberOptions();
     this.revokeObjectUrl();
@@ -118,10 +132,14 @@ export class AppComponent implements OnDestroy {
   }
 
   search(): void {
+    if (!this.validateDateTimeCriteria()) {
+      this.message = '入力内容を確認してください。';
+      return;
+    }
     this.loading = true;
     this.message = '帳票一覧を取得中です。';
     const numberCondition = this.numberQuery.trim() || undefined;
-    this.reportService.searchReports(numberCondition).subscribe({
+    this.reportService.searchReports(numberCondition, this.createSearchRequest()).subscribe({
       next: (reports: ReportSummary[]) => {
         this.reports = reports;
         this.selectedReport = undefined;
@@ -130,11 +148,36 @@ export class AppComponent implements OnDestroy {
           ? `${reports.length} 件の帳票を取得しました。`
           : '検索条件に一致する帳票がありませんでした。';
       },
-      error: () => {
+      error: (error: HttpErrorResponse) => {
         this.loading = false;
-        this.message = '帳票一覧の取得に失敗しました。';
+        this.applyBackendValidationErrors(error);
       }
     });
+  }
+
+  /** 入力中および検索実行時に、PDF作成日時の形式・実在性・相関を検証します。 */
+  validateDateTimeCriteria(): boolean {
+    const errors: Partial<Record<DateTimeField, string>> = {};
+    const startDate = this.validateDate(this.startDate, '開始年月日', 'startDate', errors);
+    const endDate = this.validateDate(this.endDate, '終了年月日', 'endDate', errors);
+    const startTime = this.validateTime(this.startTime, '開始時刻', 'startTime', errors);
+    const endTime = this.validateTime(this.endTime, '終了時刻', 'endTime', errors);
+
+    if (this.startTime.trim() && !this.startDate.trim()) {
+      errors.startTime = '開始時刻を指定する場合は、開始年月日も入力してください。';
+    }
+    if (this.endTime.trim() && !this.endDate.trim()) {
+      errors.endTime = '終了時刻を指定する場合は、終了年月日も入力してください。';
+    }
+    if (startDate && endDate && (!this.startTime.trim() || startTime) && (!this.endTime.trim() || endTime)) {
+      const start = this.toComparableDateTime(startDate, startTime, false);
+      const end = this.toComparableDateTime(endDate, endTime, true);
+      if (start > end) {
+        errors.dateRange = '開始日時は終了日時以前となるように指定してください。';
+      }
+    }
+    this.dateTimeErrors = errors;
+    return Object.keys(errors).length === 0;
   }
 
   select(report: ReportSummary): void {
@@ -179,5 +222,95 @@ export class AppComponent implements OnDestroy {
       URL.revokeObjectURL(this.objectUrl);
       this.objectUrl = undefined;
     }
+  }
+
+  private createSearchRequest(): ReportSearchRequest {
+    return {
+      startDate: this.startDate.trim() || undefined,
+      startTime: this.startTime.trim() || undefined,
+      endDate: this.endDate.trim() || undefined,
+      endTime: this.endTime.trim() || undefined
+    };
+  }
+
+  private validateDate(
+    value: string,
+    label: string,
+    field: 'startDate' | 'endDate',
+    errors: Partial<Record<DateTimeField, string>>
+  ): { year: number; month: number; day: number } | undefined {
+    const normalized = value.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    if (!/^[0-9]{8}$/.test(normalized)) {
+      errors[field] = `${label}は8桁の半角数字で入力してください。`;
+      return undefined;
+    }
+    const parts = {
+      year: Number(normalized.slice(0, 4)),
+      month: Number(normalized.slice(4, 6)),
+      day: Number(normalized.slice(6, 8))
+    };
+    const date = new Date(parts.year, parts.month - 1, parts.day);
+    if (date.getFullYear() !== parts.year || date.getMonth() !== parts.month - 1 || date.getDate() !== parts.day) {
+      errors[field] = `${label}に有効な日付を入力してください。`;
+      return undefined;
+    }
+    return parts;
+  }
+
+  private validateTime(
+    value: string,
+    label: string,
+    field: 'startTime' | 'endTime',
+    errors: Partial<Record<DateTimeField, string>>
+  ): { hour: number; minute: number } | undefined {
+    const normalized = value.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    if (!/^[0-9]{4}$/.test(normalized)) {
+      errors[field] = `${label}は4桁の半角数字で入力してください。`;
+      return undefined;
+    }
+    const parts = { hour: Number(normalized.slice(0, 2)), minute: Number(normalized.slice(2, 4)) };
+    if (parts.hour > 23 || parts.minute > 59) {
+      errors[field] = `${label}に有効な時刻を入力してください。`;
+      return undefined;
+    }
+    return parts;
+  }
+
+  private toComparableDateTime(
+    date: { year: number; month: number; day: number },
+    time: { hour: number; minute: number } | undefined,
+    endOfDay: boolean
+  ): number {
+    return new Date(
+      date.year,
+      date.month - 1,
+      date.day,
+      time?.hour ?? (endOfDay ? 23 : 0),
+      time?.minute ?? (endOfDay ? 59 : 0),
+      endOfDay && !time ? 59 : 0,
+      endOfDay && !time ? 999 : 0
+    ).getTime();
+  }
+
+  private applyBackendValidationErrors(error: HttpErrorResponse): void {
+    const details = Array.isArray(error.error?.errors) ? error.error.errors : [];
+    if (details.length > 0) {
+      const fieldErrors: Partial<Record<DateTimeField, string>> = {};
+      for (const detail of details) {
+        if (['startDate', 'startTime', 'endDate', 'endTime', 'dateRange'].includes(detail.field)) {
+          fieldErrors[detail.field as DateTimeField] = detail.message;
+        }
+      }
+      this.dateTimeErrors = fieldErrors;
+      this.message = error.error?.message || '入力内容を確認してください。';
+      return;
+    }
+    this.message = error.error?.message || '帳票一覧の取得に失敗しました。';
   }
 }

@@ -176,3 +176,50 @@ tbody tr {
     }
   }
 }
+
+.date-time-search {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, 0.7fr) auto minmax(180px, 1fr) minmax(140px, 0.7fr);
+  margin-top: 20px;
+}
+
+.date-time-field {
+  display: grid;
+  gap: 6px;
+
+  label {
+    font-weight: 700;
+  }
+
+  input {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+.range-separator {
+  align-self: center;
+  font-weight: 700;
+  margin-top: 22px;
+}
+
+.field-error {
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.range-error {
+  margin-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .date-time-search {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .range-separator {
+    display: none;
+  }
+}

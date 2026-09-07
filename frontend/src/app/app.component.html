@@ -54,6 +54,39 @@
       </label>
     </div>
 
+    <div class="date-time-search" aria-label="PDF作成日時の検索条件">
+      <div class="date-time-field">
+        <label for="startDate">PDF作成開始年月日</label>
+        <input id="startDate" name="startDate" [(ngModel)]="startDate" inputmode="numeric"
+          maxlength="8" placeholder="YYYYMMDD" autocomplete="off"
+          (ngModelChange)="validateDateTimeCriteria()" />
+        <span class="field-error" *ngIf="dateTimeErrors.startDate">{{ dateTimeErrors.startDate }}</span>
+      </div>
+      <div class="date-time-field">
+        <label for="startTime">開始時刻</label>
+        <input id="startTime" name="startTime" [(ngModel)]="startTime" inputmode="numeric"
+          maxlength="4" placeholder="HHmm" autocomplete="off"
+          (ngModelChange)="validateDateTimeCriteria()" />
+        <span class="field-error" *ngIf="dateTimeErrors.startTime">{{ dateTimeErrors.startTime }}</span>
+      </div>
+      <span class="range-separator">～</span>
+      <div class="date-time-field">
+        <label for="endDate">PDF作成終了年月日</label>
+        <input id="endDate" name="endDate" [(ngModel)]="endDate" inputmode="numeric"
+          maxlength="8" placeholder="YYYYMMDD" autocomplete="off"
+          (ngModelChange)="validateDateTimeCriteria()" />
+        <span class="field-error" *ngIf="dateTimeErrors.endDate">{{ dateTimeErrors.endDate }}</span>
+      </div>
+      <div class="date-time-field">
+        <label for="endTime">終了時刻</label>
+        <input id="endTime" name="endTime" [(ngModel)]="endTime" inputmode="numeric"
+          maxlength="4" placeholder="HHmm" autocomplete="off"
+          (ngModelChange)="validateDateTimeCriteria()" />
+        <span class="field-error" *ngIf="dateTimeErrors.endTime">{{ dateTimeErrors.endTime }}</span>
+      </div>
+    </div>
+    <p class="field-error range-error" *ngIf="dateTimeErrors.dateRange">{{ dateTimeErrors.dateRange }}</p>
+
     <p class="message">{{ message }}</p>
 
     <table *ngIf="reports.length > 0">

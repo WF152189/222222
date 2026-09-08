@@ -97,7 +97,7 @@ class ReportSearchApiTests {
     }
 
     @Test
-    void returnsMultipleValidationErrorsInOneResponse() {
+    void returnsOnlyTheHighestPriorityValidationError() {
         ResponseEntity<Map> response = search(Map.of(
                 "startDate", "20260230",
                 "endTime", "2460",
@@ -105,8 +105,29 @@ class ReportSearchApiTests {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).containsEntry("code", "VALIDATION_ERROR");
-        assertThat((List<?>) response.getBody().get("errors")).hasSize(4);
+        List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
+        assertThat(errors).singleElement().satisfies(error -> {
+            assertThat(error).containsEntry("code", "RPT-VAL-010");
+            assertThat(error).containsEntry("field", "endTime");
+        });
         assertThat(response.getBody().get("traceId")).isNotNull();
+    }
+
+    @Test
+    void prioritizesStartDateErrorOverLaterFieldErrors() {
+        ResponseEntity<Map> response = search(Map.of(
+                "startDate", "20260230",
+                "startTime", "2460",
+                "endDate", "20261301",
+                "endTime", "9999",
+                "businessId", "99999"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
+        assertThat(errors).singleElement().satisfies(error -> {
+            assertThat(error).containsEntry("code", "RPT-VAL-002");
+            assertThat(error).containsEntry("field", "startDate");
+        });
     }
 
     private void assertValidationError(Map<String, String> request,
@@ -115,7 +136,7 @@ class ReportSearchApiTests {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).containsEntry("code", "VALIDATION_ERROR");
         List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
-        assertThat(errors).anySatisfy(error -> {
+        assertThat(errors).singleElement().satisfies(error -> {
             assertThat(error).containsEntry("code", code);
             assertThat(error).containsEntry("messageId", messageId);
             assertThat(error).containsEntry("field", field);

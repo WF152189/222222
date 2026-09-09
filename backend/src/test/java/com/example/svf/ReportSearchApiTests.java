@@ -97,7 +97,7 @@ class ReportSearchApiTests {
     }
 
     @Test
-    void returnsOnlyTheHighestPriorityValidationError() {
+    void returnsOneValidationErrorForEachInvalidField() {
         ResponseEntity<Map> response = search(Map.of(
                 "startDate", "20260230",
                 "endTime", "2460",
@@ -106,15 +106,15 @@ class ReportSearchApiTests {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).containsEntry("code", "VALIDATION_ERROR");
         List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
-        assertThat(errors).singleElement().satisfies(error -> {
-            assertThat(error).containsEntry("code", "RPT-VAL-010");
-            assertThat(error).containsEntry("field", "endTime");
-        });
+        assertThat(errors).extracting(error -> error.get("code"))
+                .containsExactly("RPT-VAL-002", "RPT-VAL-010", "RPT-VAL-012");
+        assertThat(errors).extracting(error -> error.get("field"))
+                .containsExactly("startDate", "endTime", "businessId");
         assertThat(response.getBody().get("traceId")).isNotNull();
     }
 
     @Test
-    void prioritizesStartDateErrorOverLaterFieldErrors() {
+    void returnsErrorsInScreenFieldOrderWithoutDerivedRangeError() {
         ResponseEntity<Map> response = search(Map.of(
                 "startDate", "20260230",
                 "startTime", "2460",
@@ -124,10 +124,15 @@ class ReportSearchApiTests {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
-        assertThat(errors).singleElement().satisfies(error -> {
-            assertThat(error).containsEntry("code", "RPT-VAL-002");
-            assertThat(error).containsEntry("field", "startDate");
-        });
+        assertThat(errors).extracting(error -> error.get("code"))
+                .containsExactly(
+                        "RPT-VAL-002",
+                        "RPT-VAL-006",
+                        "RPT-VAL-004",
+                        "RPT-VAL-008",
+                        "RPT-VAL-012");
+        assertThat(errors).extracting(error -> error.get("field"))
+                .doesNotContain("dateRange");
     }
 
     private void assertValidationError(Map<String, String> request,

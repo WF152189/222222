@@ -26,8 +26,23 @@ class ReportSearchApiTests {
         ResponseEntity<Map> response = search(Map.of());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).containsEntry("totalCount", 3);
-        assertThat((List<?>) response.getBody().get("reports")).hasSize(3);
+        assertThat(response.getBody()).containsEntry("totalCount", 14);
+        assertThat((List<?>) response.getBody().get("reports")).hasSize(14);
+    }
+
+    @Test
+    void reportNumberSearchReturnsOriginalAndElevenAdditionalReports() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(login());
+
+        ResponseEntity<List> response = restTemplate.exchange(
+                "/api/reports?number=Q-2026-0001",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                List.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).hasSize(12);
     }
 
     @Test
@@ -97,6 +112,26 @@ class ReportSearchApiTests {
     }
 
     @Test
+    void rejectsBusinessIdWithInvalidLengthOrCharacters() {
+        assertValidationError(Map.of("businessId", "１２A"),
+                "RPT-VAL-015", "RPT-E-018", "businessId",
+                "業務IDは5桁の半角数字で入力してください。");
+    }
+
+    @Test
+    void returnsDateRangeErrorBeforeBusinessIdError() {
+        ResponseEntity<Map> response = search(Map.of(
+                "startDate", "20260807", "startTime", "1800",
+                "endDate", "20260807", "endTime", "1700",
+                "businessId", "99999"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
+        assertThat(errors).extracting(error -> error.get("code"))
+                .containsExactly("RPT-VAL-011", "RPT-VAL-012");
+    }
+
+    @Test
     void returnsOneValidationErrorForEachInvalidField() {
         ResponseEntity<Map> response = search(Map.of(
                 "startDate", "20260230",
@@ -107,7 +142,7 @@ class ReportSearchApiTests {
         assertThat(response.getBody()).containsEntry("code", "VALIDATION_ERROR");
         List<Map<String, String>> errors = (List<Map<String, String>>) response.getBody().get("errors");
         assertThat(errors).extracting(error -> error.get("code"))
-                .containsExactly("RPT-VAL-002", "RPT-VAL-010", "RPT-VAL-012");
+                .containsExactly("RPT-VAL-002", "RPT-VAL-008", "RPT-VAL-012");
         assertThat(errors).extracting(error -> error.get("field"))
                 .containsExactly("startDate", "endTime", "businessId");
         assertThat(response.getBody().get("traceId")).isNotNull();

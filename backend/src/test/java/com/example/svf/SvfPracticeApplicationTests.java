@@ -36,7 +36,7 @@ class SvfPracticeApplicationTests {
                 new HttpEntity<>(headers),
                 List.class);
         assertThat(reports.getStatusCode().is2xxSuccessful()).isTrue();
-        assertThat(reports.getBody()).hasSize(3);
+        assertThat(reports.getBody()).hasSize(14);
 
         ResponseEntity<byte[]> pdf = restTemplate.exchange(
                 "/api/reports/RPT-001/pdf",

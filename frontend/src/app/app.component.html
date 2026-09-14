@@ -89,29 +89,52 @@
 
     <p class="message">{{ message }}</p>
 
-    <table *ngIf="reports.length > 0">
-      <thead>
-        <tr>
-          <th>選択</th>
-          <th>PDF名</th>
-          <th>日付</th>
-          <th>番号</th>
-          <th>状態</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr *ngFor="let report of reports" [class.selected]="report.id === selectedReport?.id" (click)="select(report)">
-          <td><input type="radio" name="report" [checked]="report.id === selectedReport?.id" /></td>
-          <td>{{ report.name }}</td>
-          <td>{{ report.reportDate }}</td>
-          <td>{{ report.reportNumber }}</td>
-          <td>{{ report.pdfConverted ? '済' : '未' }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <section class="result-section" *ngIf="hasSearched" aria-labelledby="search-result-title">
+      <div class="result-heading">
+        <h2 id="search-result-title">検索結果</h2>
+        <span>{{ reports.length }}件</span>
+      </div>
 
-    <div class="actions">
-      <button type="button" (click)="showPdf()" [disabled]="loading || !selectedReport">PDF表示</button>
-    </div>
+      <div class="result-table-container" [style.--result-scrollbar-width.px]="resultScrollbarWidth">
+        <table class="result-table">
+          <thead>
+            <tr>
+              <th class="selection-column" scope="col">選択</th>
+              <th scope="col">PDF名</th>
+              <th scope="col">日付</th>
+              <th scope="col">番号</th>
+              <th scope="col">状態</th>
+            </tr>
+          </thead>
+          <tbody #resultBody>
+            <tr
+              *ngFor="let report of reports"
+              [class.selected]="report.id === selectedReport?.id"
+              (click)="select(report)"
+            >
+              <td class="selection-column">
+                <input
+                  type="radio"
+                  name="report"
+                  [checked]="report.id === selectedReport?.id"
+                  [attr.aria-label]="report.name + 'を選択'"
+                />
+              </td>
+              <td>{{ report.name }}</td>
+              <td>{{ report.reportDate }}</td>
+              <td>{{ report.reportNumber }}</td>
+              <td>{{ report.pdfConverted ? '済' : '未' }}</td>
+            </tr>
+            <tr class="empty-row" *ngIf="reports.length === 0">
+              <td class="empty-result" colspan="5">検索条件に一致するPDFはありません。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="actions">
+        <button type="button" (click)="showPdf()" [disabled]="loading || !selectedReport">PDF表示</button>
+      </div>
+    </section>
   </section>
 </main>

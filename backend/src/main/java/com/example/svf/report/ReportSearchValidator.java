@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
 public class ReportSearchValidator {
     private static final Pattern DATE_PATTERN = Pattern.compile("^[0-9]{8}$");
     private static final Pattern TIME_PATTERN = Pattern.compile("^[0-9]{4}$");
+    private static final Pattern BUSINESS_ID_PATTERN = Pattern.compile("^[0-9]{5}$");
     private static final DateTimeFormatter DATE_FORMATTER =
             DateTimeFormatter.ofPattern("uuuuMMdd").withResolverStyle(ResolverStyle.STRICT);
     private static final Set<String> BUSINESS_IDS = Set.of("10001", "10002", "10003");
@@ -34,33 +35,31 @@ public class ReportSearchValidator {
 
         List<ValidationErrorDetail> errors = new ArrayList<>();
 
-        // 画面の項目順に検証する。同一項目について返すエラーは最大1件とする。
+        // 1. 開始年月日の桁数・半角・実在性を検証する。
         LocalDate startDate = validateDate(startDateText, "startDate", true, errors);
-        LocalTime startTime;
-        if (startTimeText != null && startDateText == null) {
+
+        // 2. 開始時刻の桁数・半角・実在性を検証する。
+        LocalTime startTime = validateTime(startTimeText, "startTime", true, errors);
+
+        // 3. 開始年月日と開始時刻の入力依存を検証する。
+        if (startTimeText != null && startDateText == null && !hasFieldError(errors, "startTime")) {
             errors.add(error("RPT-VAL-009", "RPT-E-015",
                     "開始時刻を指定する場合は、開始年月日も入力してください。", "startTime"));
-            startTime = null;
-        } else {
-            startTime = validateTime(startTimeText, "startTime", true, errors);
         }
 
+        // 4. 終了年月日の桁数・半角・実在性を検証する。
         LocalDate endDate = validateDate(endDateText, "endDate", false, errors);
-        LocalTime endTime;
-        if (endTimeText != null && endDateText == null) {
+
+        // 5. 終了時刻の桁数・半角・実在性を検証する。
+        LocalTime endTime = validateTime(endTimeText, "endTime", false, errors);
+
+        // 6. 終了年月日と終了時刻の入力依存を検証する。
+        if (endTimeText != null && endDateText == null && !hasFieldError(errors, "endTime")) {
             errors.add(error("RPT-VAL-010", "RPT-E-016",
                     "終了時刻を指定する場合は、終了年月日も入力してください。", "endTime"));
-            endTime = null;
-        } else {
-            endTime = validateTime(endTimeText, "endTime", false, errors);
         }
 
-        if (businessId != null && !BUSINESS_IDS.contains(businessId)) {
-            errors.add(error("RPT-VAL-012", "RPT-E-017",
-                    "有効な業務IDを入力してください。", "businessId"));
-        }
-
-        // 入力済みの時刻が不正な場合は日時を組み立てず、派生する範囲エラーを抑止する。
+        // 7. 単項目・依存チェックが正常な日時だけを組み立て、前後関係を検証する。
         LocalDateTime startDateTime = startDate == null || (startTimeText != null && startTime == null)
                 ? null
                 : startDate.atTime(startTime == null ? LocalTime.MIN : startTime);
@@ -71,6 +70,9 @@ public class ReportSearchValidator {
             errors.add(error("RPT-VAL-011", "RPT-E-014",
                     "開始日時は終了日時以前となるように指定してください。", "dateRange"));
         }
+
+        // 8. 業務番号の桁数・半角および利用可能な業務ID一覧への存在を検証する。
+        validateBusinessId(businessId, errors);
 
         if (!errors.isEmpty()) {
             throw new ReportValidationException(errors);
@@ -131,6 +133,25 @@ public class ReportSearchValidator {
 
     private ValidationErrorDetail error(String code, String messageId, String message, String field) {
         return new ValidationErrorDetail(code, messageId, message, field);
+    }
+
+    private void validateBusinessId(String businessId, List<ValidationErrorDetail> errors) {
+        if (businessId == null) {
+            return;
+        }
+        if (!BUSINESS_ID_PATTERN.matcher(businessId).matches()) {
+            errors.add(error("RPT-VAL-015", "RPT-E-018",
+                    "業務IDは5桁の半角数字で入力してください。", "businessId"));
+            return;
+        }
+        if (!BUSINESS_IDS.contains(businessId)) {
+            errors.add(error("RPT-VAL-012", "RPT-E-017",
+                    "有効な業務IDを入力してください。", "businessId"));
+        }
+    }
+
+    private boolean hasFieldError(List<ValidationErrorDetail> errors, String field) {
+        return errors.stream().anyMatch(error -> field.equals(error.field()));
     }
 
     private String normalize(String value) {

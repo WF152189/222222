@@ -102,24 +102,123 @@ button:disabled {
   padding: 12px;
 }
 
-table {
+.result-section {
+  margin-top: 24px;
+}
+
+.result-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+
+  h2 {
+    font-size: 18px;
+    margin: 0;
+  }
+
+  span {
+    color: #64748b;
+    font-size: 14px;
+  }
+}
+
+.result-table-container {
+  border: 1px solid #475569;
+  overflow-x: auto;
+}
+
+.result-table {
   border-collapse: collapse;
+  display: grid;
+  min-width: 720px;
   width: 100%;
-}
 
-th,
-td {
-  border-bottom: 1px solid #e5e7eb;
-  padding: 12px;
-  text-align: left;
-}
+  thead,
+  tbody {
+    display: block;
+  }
 
-tr.selected {
-  background: #dbeafe;
-}
+  thead {
+    background: #b8b8b8;
+  }
 
-tbody tr {
-  cursor: pointer;
+  thead tr,
+  tbody tr {
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: 80px minmax(200px, 1fr) 160px 220px 120px;
+  }
+
+  // スクロールバーは明細部分だけに表示する。
+  tbody {
+    background: #ffffff;
+    max-height: 440px;
+    overflow-y: auto;
+  }
+
+  // ブラウザで計測したスクロールバー幅を除き、明細と同じ有効幅にする。
+  thead tr {
+    width: calc(100% - var(--result-scrollbar-width, 0px));
+  }
+
+  .empty-row {
+    grid-template-columns: 1fr;
+  }
+
+  th,
+  td {
+    border-bottom: 1px solid #475569;
+    border-right: 1px solid #475569;
+    box-sizing: border-box;
+    height: 44px;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: middle;
+  }
+
+  th:last-child,
+  td:last-child {
+    border-right: 0;
+  }
+
+  th {
+    background: #b8b8b8;
+    color: #111827;
+    font-weight: 700;
+  }
+
+  tbody tr:not(.empty-row) {
+    cursor: pointer;
+
+    &:hover {
+      background: #f1f5f9;
+    }
+
+    &.selected {
+      background: #dbeafe;
+    }
+  }
+
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .selection-column {
+    text-align: center;
+    width: 80px;
+
+    input {
+      min-width: auto;
+    }
+  }
+
+  .empty-result {
+    color: #64748b;
+    padding: 28px 16px;
+    text-align: center;
+  }
+
 }
 
 .actions {

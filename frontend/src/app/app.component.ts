@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy } from '@angular/core';
+import { Component, ElementRef, OnDestroy, ViewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { AuthenticatedUser } from './auth.model';
@@ -19,7 +19,11 @@ type DateTimeField = 'startDate' | 'startTime' | 'endDate' | 'endTime' | 'dateRa
   styleUrl: './app.component.scss'
 })
 export class AppComponent implements OnDestroy {
+  @ViewChild('resultBody') private resultBody?: ElementRef<HTMLTableSectionElement>;
+
   reports: ReportSummary[] = [];
+  hasSearched = false;
+  resultScrollbarWidth = 0;
   currentUser: AuthenticatedUser | null;
   loginUsername = 'zhangsan';
   loginPassword = 'password';
@@ -81,6 +85,7 @@ export class AppComponent implements OnDestroy {
     this.authService.logout();
     this.currentUser = null;
     this.reports = [];
+    this.hasSearched = false;
     this.selectedReport = undefined;
     this.numberQuery = '';
     this.startDate = '';
@@ -142,8 +147,10 @@ export class AppComponent implements OnDestroy {
     this.reportService.searchReports(numberCondition, this.createSearchRequest()).subscribe({
       next: (reports: ReportSummary[]) => {
         this.reports = reports;
+        this.hasSearched = true;
         this.selectedReport = undefined;
         this.loading = false;
+        this.updateResultScrollbarWidth();
         this.message = reports.length > 0
           ? `${reports.length} 件の帳票を取得しました。`
           : '検索条件に一致する帳票がありませんでした。';
@@ -222,6 +229,14 @@ export class AppComponent implements OnDestroy {
       URL.revokeObjectURL(this.objectUrl);
       this.objectUrl = undefined;
     }
+  }
+
+  /** 明細スクロールバーの実幅をヘッダーの列幅調整に使用します。 */
+  private updateResultScrollbarWidth(): void {
+    window.requestAnimationFrame(() => {
+      const body = this.resultBody?.nativeElement;
+      this.resultScrollbarWidth = body ? body.offsetWidth - body.clientWidth : 0;
+    });
   }
 
   private createSearchRequest(): ReportSearchRequest {

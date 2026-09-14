@@ -45,6 +45,27 @@ public class ReportService {
                 LocalDateTime.of(2026, 8, 5, 13, 15), "zhangsan@example.com", "张三", "10002"));
         searchMetadata.put("RPT-003", new SearchMetadata(
                 LocalDateTime.of(2026, 8, 7, 17, 45), "zhangsan@example.com", "张三", "10001"));
+
+        // 検索結果テーブルのスクロール確認用データ（既存1件と合わせて12件表示）。
+        for (int index = 1; index <= 11; index++) {
+            String reportId = String.format("RPT-Q-%03d", index);
+            LocalDate reportDate = LocalDate.of(2026, 8, 7 + index);
+            reports.put(reportId, new ReportDetail(
+                    reportId,
+                    String.format("見積書%02d", index),
+                    reportDate,
+                    "Q-2026-0001",
+                    String.format("サンプル取引先%02d", index),
+                    List.of(new ReportLine(
+                            String.format("サンプル明細%02d", index),
+                            index,
+                            new BigDecimal("1000")))));
+            searchMetadata.put(reportId, new SearchMetadata(
+                    reportDate.atTime(9, 0),
+                    "zhangsan@example.com",
+                    "张三",
+                    "10001"));
+        }
     }
 
     /**

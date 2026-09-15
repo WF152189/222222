@@ -1,0 +1,628 @@
+package com.auth.app.provider;
+
+import com.auth.app.model.OperatingHoursSetting;
+
+import java.time.LocalDate;
+
+/**
+ * API運用時間オーバーライド設定の取得プロバイダーインターフェース
+ * 
+ * 責務:
+ * - API運用時間オーバーライド設定の各項目を取得
+ * - 適用期間（開始日付・終了日付）の提供
+ * - 各APIの変更有無フラグ・変更後開始時間・変更後終了時間の提供
+ * 
+ * 実装クラス:
+ * - {@link com.auth.app.config.PropertyFileOperatingHoursProvider} - プロパティファイルから取得
+ * 
+ * 将来的な拡張:
+ * - DBから取得する実装
+ * - 外部APIから取得する実装
+ */
+public interface OperatingHoursProvider<T> {
+
+    /**
+     * 現在の設定一式を同一世代のスナップショットとして取得する。
+     * 実装側にアトミックな取得方法がある場合はオーバーライドすること。
+     */
+    default OperatingHoursSnapshot getSnapshot() {
+        return new OperatingHoursSnapshot(
+                getEffectiveStartDate(),
+                getEffectiveEndDate(),
+                isApi1Changed(),
+                getApi1StartTime(),
+                getApi1EndTime(),
+                isApi2Changed(),
+                getApi2StartTime(),
+                getApi2EndTime());
+    }
+    
+    // ========================================
+    // 適用期間
+    // ========================================
+    
+    /**
+     * 変更後適用開始日付を取得
+     * 
+     * @return 適用開始日付（yyyy-MM-dd形式、設定なしの場合はnull）
+     */
+    String getEffectiveStartDate();
+    
+    /**
+     * 変更後適用終了日付を取得
+     * 
+     * @return 適用終了日付（yyyy-MM-dd形式、設定なしの場合はnull）
+     */
+    String getEffectiveEndDate();
+    
+    /**
+     * 現在が適用期間中かどうかを判定
+     * 
+     * 判定ルール:
+     * - 開始日付または終了日付がnullの場合: false（期間外）
+     * - 両方設定: 開始日付 <= 現在日付 <= 終了日付 であればtrue
+     * 
+     * @return 適用期間中の場合true、それ以外の場合false
+     */
+    default boolean isCurrentlyEffective() {
+        OperatingHoursSnapshot snapshot = getSnapshot();
+        return snapshot != null && snapshot.isCurrentlyEffective(LocalDate.now());
+    }
+    
+    // ========================================
+    // API1
+    // ========================================
+    
+    /**
+     * API1の変更有無フラグを取得
+     * 
+     * @return true=変更あり、false=変更なし
+     */
+    boolean isApi1Changed();
+    
+    /**
+     * API1の変更後開始時間を取得
+     * 
+     * @return 変更後の開始時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    String getApi1StartTime();
+    
+    /**
+     * API1の変更後終了時間を取得
+     * 
+     * @return 変更後の終了時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    String getApi1EndTime();
+    
+    // ========================================
+    // API2
+    // ========================================
+    
+    /**
+     * API2の変更有無フラグを取得
+     * 
+     * @return true=変更あり、false=変更なし
+     */
+    boolean isApi2Changed();
+    
+    /**
+     * API2の変更後開始時間を取得
+     * 
+     * @return 変更後の開始時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    String getApi2StartTime();
+    
+    /**
+     * API2の変更後終了時間を取得
+     * 
+     * @return 変更後の終了時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    String getApi2EndTime();
+    
+    // ========================================
+    // 設定の保存・再読み込み
+    // ========================================
+    
+    /**
+     * 設定を保存
+     * 
+     * @param setting 保存する設定
+     * @return 保存後の設定
+     * @throws UnsupportedOperationException このプロバイダーがsave操作をサポートしていない場合
+     */
+    T save(T setting);
+    
+    /**
+     * キャッシュを強制的に再読み込み
+     * 
+     * @return 再読み込み成功時true、失敗時false
+     */
+    boolean reload();
+}
+package com.auth.app.config;
+
+import com.auth.app.model.OperatingHoursSetting;
+import com.auth.app.provider.OperatingHoursProvider;
+import com.auth.app.provider.OperatingHoursSnapshot;
+import com.auth.app.repository.OperatingHoursSettingRepository;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * データベースベースのAPI運用時間オーバーライド設定プロバイダー
+ * 
+ * 責務:
+ * - データベースから運用時間オーバーライド設定を取得
+ * - キャッシュによるパフォーマンス最適化
+ * - 設定変更時のキャッシュ更新
+ * 
+ * キャッシュ方式:
+ * - 初回アクセス時にDBから読み込み → メモリキャッシュ
+ * - 明示的なreload()呼び出しでキャッシュ更新
+ * - 設定の更新頻度が低いことを想定
+ * 
+ * 切り替え:
+ * - application.yml で `operating-hours.provider: db` を設定するとこの実装が使用される
+ * 
+ * キャッシュ自動更新:
+ * - 外部SQLによるDB直接更新に対応するため、定期的にキャッシュを自動更新
+ * - 更新スケジュールは `operating-hours.cache.cron` でcron式により設定可能（デフォルト毎日6時）
+ * 
+ * スタブモード:
+ * - `stub.enabled=true` の場合、DBアクセスをスキップし、デフォルト値（オーバーライドなし）を返す
+ * - 定期キャッシュ更新もスキップされる
+ */
+@Component("dbOperatingHoursProvider")
+@ConditionalOnProperty(
+    name = "operating-hours.provider",
+    havingValue = "db"
+)
+@Slf4j
+public class DbOperatingHoursProvider implements OperatingHoursProvider<OperatingHoursSetting> {
+    
+    private final OperatingHoursSettingRepository repository;
+
+    /** スタブモード有効フラグ */
+    @Value("${stub.enabled:false}")
+    private boolean stubEnabled;
+    
+    /** キャッシュされた設定（メモリキャッシュ） */
+    private final AtomicReference<OperatingHoursSetting> cachedSetting = new AtomicReference<>();
+    
+    /**
+     * コンストラクタ
+     * 
+     * @param repository 運用時間設定リポジトリ
+     */
+    public DbOperatingHoursProvider(OperatingHoursSettingRepository repository) {
+        this.repository = repository;
+        log.info("DbOperatingHoursProvider 初期化完了（DBベース）");
+    }
+
+    /**
+     * スタブモード有効フラグを設定
+     * 
+     * @param stubEnabled スタブモードを有効にする場合true
+     */
+    public void setStubEnabled(boolean stubEnabled) {
+        this.stubEnabled = stubEnabled;
+    }
+
+    @Override
+    public synchronized OperatingHoursSnapshot getSnapshot() {
+        return OperatingHoursSnapshot.from(getSetting());
+    }
+    
+    // ========================================
+    // 適用期間
+    // ========================================
+    
+    /**
+     * 変更後適用開始日付を取得
+     * 
+     * @return 適用開始日付（yyyy-MM-dd形式、設定なしの場合はnull）
+     */
+    @Override
+    public String getEffectiveStartDate() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null ? setting.getEffectiveStartDate() : null;
+    }
+    
+    /**
+     * 変更後適用終了日付を取得
+     * 
+     * @return 適用終了日付（yyyy-MM-dd形式、設定なしの場合はnull）
+     */
+    @Override
+    public String getEffectiveEndDate() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null ? setting.getEffectiveEndDate() : null;
+    }
+    
+    // ========================================
+    // API1
+    // ========================================
+    
+    /**
+     * API1の変更有無フラグを取得
+     * 
+     * @return true=変更あり、false=変更なし
+     */
+    @Override
+    public boolean isApi1Changed() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null && Boolean.TRUE.equals(setting.getApi1Changed());
+    }
+    
+    /**
+     * API1の変更後開始時間を取得
+     * 
+     * @return 変更後の開始時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    @Override
+    public String getApi1StartTime() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null ? setting.getApi1StartTime() : null;
+    }
+    
+    /**
+     * API1の変更後終了時間を取得
+     * 
+     * @return 変更後の終了時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    @Override
+    public String getApi1EndTime() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null ? setting.getApi1EndTime() : null;
+    }
+    
+    // ========================================
+    // API2
+    // ========================================
+    
+    /**
+     * API2の変更有無フラグを取得
+     * 
+     * @return true=変更あり、false=変更なし
+     */
+    @Override
+    public boolean isApi2Changed() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null && Boolean.TRUE.equals(setting.getApi2Changed());
+    }
+    
+    /**
+     * API2の変更後開始時間を取得
+     * 
+     * @return 変更後の開始時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    @Override
+    public String getApi2StartTime() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null ? setting.getApi2StartTime() : null;
+    }
+    
+    /**
+     * API2の変更後終了時間を取得
+     * 
+     * @return 変更後の終了時刻（HH:mm形式、設定なしの場合はnull）
+     */
+    @Override
+    public String getApi2EndTime() {
+        OperatingHoursSetting setting = getSetting();
+        return setting != null ? setting.getApi2EndTime() : null;
+    }
+    
+    // ========================================
+    // ユーティリティメソッド
+    // ========================================
+    
+    /**
+     * 設定データを取得（キャッシュ or DBから再取得）
+     * 
+     * 処理フロー:
+     * 1. キャッシュにデータがある場合 → キャッシュを返す
+     * 2. キャッシュにデータがない場合 → DBから取得してキャッシュ
+     * 
+     * 注意:
+     * - 設定変更後は reload() を呼び出してキャッシュを更新すること
+     * - スレッドセーフ（synchronized）により、複数スレッドからの同時アクセスを制御
+     * 
+     * @return 設定データ。存在しない場合はnull
+     */
+    private synchronized OperatingHoursSetting getSetting() {
+        // スタブモード: DBアクセスをスキップし、null（オーバーライドなし）を返す
+        if (stubEnabled) {
+            return null;
+        }
+
+        // キャッシュから取得を試行
+        OperatingHoursSetting cached = cachedSetting.get();
+        if (cached != null) {
+            return cached;
+        }
+        
+        // DBから取得（is_active=true のレコード）
+        Optional<OperatingHoursSetting> settingOpt = repository.findByIsActiveTrue();
+        if (settingOpt.isPresent()) {
+            OperatingHoursSetting setting = settingOpt.get();
+            cachedSetting.set(setting);
+            log.debug("運用時間設定をDBから読み込みました");
+            return setting;
+        }
+        
+        log.debug("運用時間設定がDBに存在しません");
+        return null;
+    }
+    
+    /**
+     * キャッシュを強制的に再読み込み
+     * 
+     * 使用場面:
+     * - 設定データが更新された後
+     * - テストでデータを変更した後
+     * 
+     * スレッドセーフ:
+     * - synchronized により、複数スレッドからの同時アクセスを制御
+     */
+    @Override
+    public synchronized boolean reload() {
+        // スタブモード: 再読み込みをスキップ
+        if (stubEnabled) {
+            log.debug("[スタブ] reload() をスキップしました");
+            return true;
+        }
+
+        try {
+            OperatingHoursSetting newSetting = repository.findByIsActiveTrue().orElse(null);
+            cachedSetting.set(newSetting);
+            log.info("運用時間設定を手動再読み込みしました");
+            return true;
+        } catch (Exception e) {
+            log.error("運用時間設定の再読み込みに失敗したため、旧キャッシュを維持します", e);
+            return false;
+        }
+    }
+    
+    /**
+     * 設定を保存
+     * 
+     * 処理フロー:
+     * 1. 既存のアクティブな設定を無効化
+     * 2. 新しい設定を保存（is_active=true）
+     * 3. トランザクションコミット後にキャッシュを更新
+     *    （トランザクション外の場合は即座にキャッシュ更新）
+     * 
+     * @param setting 保存する設定
+     * @return 保存後の設定
+     */
+    @org.springframework.transaction.annotation.Transactional
+    @Override
+    public OperatingHoursSetting save(OperatingHoursSetting setting) {
+        // スタブモード: DB保存をスキップ
+        if (stubEnabled) {
+            log.info("[スタブ] save() をスキップしました");
+            return setting;
+        }
+
+        // 既存のアクティブを無効化
+        repository.deactivateAll();
+        
+        // 新しい設定を保存
+        setting.setIsActive(true);
+        OperatingHoursSetting saved = repository.save(setting);
+        log.info("運用時間設定を保存しました: id={}", saved.getId());
+        
+        // キャッシュ更新
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            // トランザクション内の場合: コミット後にキャッシュ更新
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        reload();
+                    }
+                }
+            );
+        } else {
+            // トランザクション外の場合: 即座にキャッシュ更新
+            reload();
+        }
+        
+        return saved;
+    }
+
+    // ========================================
+    // 定期キャッシュ更新
+    // ========================================
+
+    /**
+     * 定期によるキャッシュ自動更新
+     * 
+     * 外部SQLによるDB直接更新に対応するため、cron式で指定されたスケジュールでキャッシュを再読み込みする。
+     * - スケジュール: application.yml の `operating-hours.cache.cron` でcron式により設定
+     * - デフォルト: 毎日6:00（`0 0 6 * * *`）
+     * - readOnly トランザクションで実行し、DB整合性を保証
+     */
+    @Scheduled(cron = "${operating-hours.cache.cron:0 0 6 * * *}")
+    @Transactional(readOnly = true)
+    public void scheduledRefresh() {
+        // スタブモード: 定期更新をスキップ
+        if (stubEnabled) {
+            log.debug("[スタブ] scheduledRefresh() をスキップしました");
+            return;
+        }
+
+        try {
+            boolean reloaded = reload();
+            if (!reloaded) {
+                log.warn("定期キャッシュ更新に失敗しました。旧キャッシュで処理を継続します");
+                return;
+            }
+            log.debug("定期キャッシュ更新完了");
+        } catch (Exception e) {
+            log.error("定期キャッシュ更新中にエラーが発生しました", e);
+        }
+    }
+}
+package com.auth.app.provider;
+
+import com.auth.app.model.OperatingHoursSetting;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Objects;
+
+/**
+ * 1回のAPI選択処理で使用する運用時間設定の不変スナップショット。
+ */
+public final class OperatingHoursSnapshot {
+
+    private final String effectiveStartDate;
+    private final String effectiveEndDate;
+    private final boolean api1Changed;
+    private final String api1StartTime;
+    private final String api1EndTime;
+    private final boolean api2Changed;
+    private final String api2StartTime;
+    private final String api2EndTime;
+
+    public OperatingHoursSnapshot(
+            String effectiveStartDate,
+            String effectiveEndDate,
+            boolean api1Changed,
+            String api1StartTime,
+            String api1EndTime,
+            boolean api2Changed,
+            String api2StartTime,
+            String api2EndTime) {
+        this.effectiveStartDate = effectiveStartDate;
+        this.effectiveEndDate = effectiveEndDate;
+        this.api1Changed = api1Changed;
+        this.api1StartTime = api1StartTime;
+        this.api1EndTime = api1EndTime;
+        this.api2Changed = api2Changed;
+        this.api2StartTime = api2StartTime;
+        this.api2EndTime = api2EndTime;
+    }
+
+    public static OperatingHoursSnapshot from(OperatingHoursSetting setting) {
+        if (setting == null) {
+            return null;
+        }
+
+        return new OperatingHoursSnapshot(
+                setting.getEffectiveStartDate(),
+                setting.getEffectiveEndDate(),
+                Boolean.TRUE.equals(setting.getApi1Changed()),
+                setting.getApi1StartTime(),
+                setting.getApi1EndTime(),
+                Boolean.TRUE.equals(setting.getApi2Changed()),
+                setting.getApi2StartTime(),
+                setting.getApi2EndTime());
+    }
+
+    public boolean isCurrentlyEffective(LocalDate date) {
+        if (effectiveStartDate == null || effectiveEndDate == null) {
+            return false;
+        }
+
+        try {
+            LocalDate startDate = LocalDate.parse(effectiveStartDate, DateTimeFormatter.ISO_LOCAL_DATE);
+            LocalDate endDate = LocalDate.parse(effectiveEndDate, DateTimeFormatter.ISO_LOCAL_DATE);
+            return !date.isBefore(startDate) && !date.isAfter(endDate);
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
+    public String getEffectiveStartDate() {
+        return effectiveStartDate;
+    }
+
+    public String getEffectiveEndDate() {
+        return effectiveEndDate;
+    }
+
+    public boolean isApi1Changed() {
+        return api1Changed;
+    }
+
+    public String getApi1StartTime() {
+        return api1StartTime;
+    }
+
+    public String getApi1EndTime() {
+        return api1EndTime;
+    }
+
+    public boolean isApi2Changed() {
+        return api2Changed;
+    }
+
+    public String getApi2StartTime() {
+        return api2StartTime;
+    }
+
+    public String getApi2EndTime() {
+        return api2EndTime;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof OperatingHoursSnapshot)) {
+            return false;
+        }
+        OperatingHoursSnapshot that = (OperatingHoursSnapshot) o;
+        return api1Changed == that.api1Changed
+                && api2Changed == that.api2Changed
+                && Objects.equals(effectiveStartDate, that.effectiveStartDate)
+                && Objects.equals(effectiveEndDate, that.effectiveEndDate)
+                && Objects.equals(api1StartTime, that.api1StartTime)
+                && Objects.equals(api1EndTime, that.api1EndTime)
+                && Objects.equals(api2StartTime, that.api2StartTime)
+                && Objects.equals(api2EndTime, that.api2EndTime);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(
+                effectiveStartDate,
+                effectiveEndDate,
+                api1Changed,
+                api1StartTime,
+                api1EndTime,
+                api2Changed,
+                api2StartTime,
+                api2EndTime);
+    }
+
+    @Override
+    public String toString() {
+        return "OperatingHoursSnapshot{" +
+                "effectiveStartDate='" + effectiveStartDate + '\'' +
+                ", effectiveEndDate='" + effectiveEndDate + '\'' +
+                ", api1Changed=" + api1Changed +
+                ", api1StartTime='" + api1StartTime + '\'' +
+                ", api1EndTime='" + api1EndTime + '\'' +
+                ", api2Changed=" + api2Changed +
+                ", api2StartTime='" + api2StartTime + '\'' +
+                ", api2EndTime='" + api2EndTime + '\'' +
+                '}';
+    }
+}
+  OperatingHoursSnapshot override = operatingHoursProvider.getSnapshot();
+        boolean overrideEffective = override != null && override.isCurrentlyEffective(LocalDate.now());

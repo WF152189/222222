@@ -28,7 +28,6 @@ export class AppComponent implements OnDestroy {
   loginUsername = 'zhangsan';
   loginPassword = 'password';
   selectedReport?: ReportSummary;
-  private objectUrl?: string;
   loading = false;
   message = '検索ボタンを押して帳票一覧を取得してください。';
   /** 番号検索入力欄の入力値 */
@@ -95,7 +94,6 @@ export class AppComponent implements OnDestroy {
     this.dateTimeErrors = {};
     this.numberOptions = [];
     this.closeNumberOptions();
-    this.revokeObjectUrl();
     this.message = 'ログアウトしました。';
   }
 
@@ -197,37 +195,97 @@ export class AppComponent implements OnDestroy {
       this.message = 'PDF表示する帳票を選択してください。';
       return;
     }
+    const report = this.selectedReport;
     this.loading = true;
-    this.message = 'SVF Cloud mock にPDF変換を依頼しています。';
-    this.reportService.fetchPdf(this.selectedReport.id).subscribe({
-      next: (blob: Blob) => {
-        this.revokeObjectUrl();
-        this.objectUrl = URL.createObjectURL(blob);
-        window.open(this.objectUrl, '_blank');
-        this.reports = this.reports.map((report) =>
-          report.id === this.selectedReport?.id ? { ...report, pdfConverted: true } : report
-        );
+    this.message = 'PDFを生成しています。';
+
+    this.reportService.fetchPdf(report.id).subscribe({
+      next: (pdfBlob) => {
         this.loading = false;
-        this.message = `PDF変換が完了しました。新しいタブで表示しています。実行ユーザー: ${this.currentUser?.userName ?? ''}`;
+        if (this.openPdfViewer(pdfBlob, report.name, report.reportNumber)) {
+          this.message = `${report.name}を新しいタブで表示しました。`;
+        } else {
+          this.message = 'PDF表示用のタブを開けませんでした。ブラウザーのポップアップ設定を確認してください。';
+        }
       },
-      error: () => {
+      error: (error: HttpErrorResponse) => {
         this.loading = false;
-        this.message = 'PDF変換に失敗しました。';
+        void this.resolvePdfErrorMessage(error).then((message) => {
+          this.message = message;
+        });
       }
     });
+  }
+
+  /** 生成済みPDFをHTMLページ内のiframeに設定し、新しいタブで表示します。 */
+  private openPdfViewer(pdfBlob: Blob, reportName: string, reportNumber: string): boolean {
+    const viewerWindow = window.open('', '_blank');
+    if (!viewerWindow) {
+      return false;
+    }
+
+    viewerWindow.opener = null;
+    const objectUrl = URL.createObjectURL(pdfBlob);
+    const title = reportNumber ? `${reportName} ${reportNumber}` : reportName;
+
+    viewerWindow.document.title = title;
+    viewerWindow.document.documentElement.lang = 'ja';
+    viewerWindow.document.body.style.margin = '0';
+    viewerWindow.document.body.style.overflow = 'hidden';
+
+    const frame = viewerWindow.document.createElement('iframe');
+    frame.src = objectUrl;
+    frame.title = 'PDFプレビュー';
+
+    const sourceIcon = document.head.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+
+    if (sourceIcon) {
+      const viewerIcon = viewerWindow.document.createElement('link');
+      viewerIcon.rel = sourceIcon.rel;
+      viewerIcon.type = sourceIcon.type;
+      viewerIcon.href = sourceIcon.href;
+
+      viewerWindow.document.head.appendChild(viewerIcon);
+    }
+    frame.style.border = '0';
+    frame.style.display = 'block';
+    frame.style.height = '100vh';
+    frame.style.width = '100%';
+    viewerWindow.document.body.appendChild(frame);
+
+    viewerWindow.addEventListener('beforeunload', () => {
+      URL.revokeObjectURL(objectUrl);
+    }, { once: true });
+    return true;
+  }
+
+  /** responseType=blob のエラーレスポンスから画面表示用メッセージを取得します。 */
+  private async resolvePdfErrorMessage(error: HttpErrorResponse): Promise<string> {
+    if (error.error instanceof Blob) {
+      try {
+        const body = JSON.parse(await error.error.text()) as { message?: unknown };
+        if (typeof body.message === 'string' && body.message.trim()) {
+          return body.message;
+        }
+      } catch {
+        // JSON形式でない場合は、HTTPステータスに応じた共通メッセージを使用する。
+      }
+    } else if (typeof error.error?.message === 'string' && error.error.message.trim()) {
+      return error.error.message;
+    }
+
+    if (error.status === 404) {
+      return '指定された帳票が見つかりません。';
+    }
+    if (error.status === 502 || error.status === 503 || error.status === 504) {
+      return 'PDFを生成できませんでした。時間をおいて再度実行してください。';
+    }
+    return 'PDFの生成に失敗しました。';
   }
 
   ngOnDestroy(): void {
     if (this.closeOptionsTimeout) {
       window.clearTimeout(this.closeOptionsTimeout);
-    }
-    this.revokeObjectUrl();
-  }
-
-  private revokeObjectUrl(): void {
-    if (this.objectUrl) {
-      URL.revokeObjectURL(this.objectUrl);
-      this.objectUrl = undefined;
     }
   }
 
